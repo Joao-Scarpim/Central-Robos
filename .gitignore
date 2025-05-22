@@ -1,0 +1,19 @@
+# Ignorar arquivos de ambiente
+*.env
+.env
+**/.env
+
+# Ignorar pastas de log
+logs/
+output/
+build/
+dist/
+
+# Ignorar virtualenv
+venv/
+.env/
+
+# Ignorar arquivos do PyInstaller
+*.spec
+*.pyc
+__pycache__/
