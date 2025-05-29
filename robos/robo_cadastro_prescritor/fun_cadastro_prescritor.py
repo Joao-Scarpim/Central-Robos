@@ -1,20 +1,9 @@
-from datetime import datetime
-from idlelib.iomenu import encoding
-from pathlib import *
-import sys
-import requests
 import os
 import logging
 import pyodbc
-from dotenv import load_dotenv
-from idna.idnadata import scripts
+import requests
+from datetime import datetime
 
-
-def get_resource_path(relative_path):
-    """Retorna o caminho correto para arquivos adicionais, dentro ou fora do executável."""
-    if hasattr(sys, '_MEIPASS'):
-        return os.path.join(sys._MEIPASS, relative_path)
-    return os.path.abspath(relative_path)
 
 def get_logger(nome_robo: str):
     log_dir = os.path.join("logs", f"logs_{nome_robo}")
@@ -23,14 +12,12 @@ def get_logger(nome_robo: str):
     log_filename = datetime.now().strftime("log_%Y-%m-%d.txt")
     log_path = os.path.join(log_dir, log_filename)
 
-    logger = logging.getLogger(f"logger_{nome_robo}")  # Usa nome único
+    logger = logging.getLogger(f"logger_{nome_robo}")
     logger.setLevel(logging.INFO)
 
-    # Remove handlers antigos se existirem
     if logger.hasHandlers():
         logger.handlers.clear()
 
-    # Cria novo FileHandler e StreamHandler
     file_handler = logging.FileHandler(log_path, encoding="utf-8")
     stream_handler = logging.StreamHandler()
 
@@ -44,11 +31,7 @@ def get_logger(nome_robo: str):
     return logger.info
 
 
-
 log = get_logger("cadastro_de_prescritor")
-
-load_dotenv()
-
 
 
 central_db_config = {
@@ -59,6 +42,7 @@ central_db_config = {
 }
 
 def conectar_central():
+    """Estabelece conexão com o banco de dados central e retorna a conexão."""
     try:
         conn = pyodbc.connect(
             f"DRIVER={{SQL Server}};"
@@ -68,122 +52,97 @@ def conectar_central():
             f"PWD={central_db_config['password']}"
         )
         return conn
+
     except Exception as e:
         log(f"Erro ao conectar ao banco central: {e}")
         return None
 
 
-
-
-def cadastrar_prescritor(uf, crm, tipo_cr):
+def cadastrar_prescritor(uf, crm, tipo_cr, token_api):
     mensagem = ""
-    conn = None
-    cursor = None
+
+    if tipo_cr.upper() != "CRM":
+        mensagem = f"Os cadastros de {tipo_cr} precisam ser feitos manualmente, chamado encaminhado para análise"
+        log(mensagem)
+        return mensagem, tipo_cr
 
     try:
-        if tipo_cr != "CRM":
-            mensagem = f"Os cadastros de {tipo_cr} precisam ser feitos manualmente, chamado encaminhado para análise"
-            log(f"Os cadastros de {tipo_cr} precisam ser feitos manualmente, chamado encaminhado para análise")
-            return
+        # === CONSULTA API DATAHUB ===
+        consulta_url = "https://datahub-api.nisseilabs.com.br/clientes/medico"
+        params = {
+            "crm_id": crm,
+            "uf": uf.upper()
+        }
+        headers = {
+            "Authorization": f"Bearer {token_api}"
+        }
 
+        response = requests.get(consulta_url, params=params, headers=headers)
+        if response.status_code != 200:
+            log(f"Erro ao consultar API do médico. Status: {response.status_code} - {response.text}")
+            return "Erro ao consultar API de médicos.", tipo_cr
+
+        medico_data = response.json()
+
+        if medico_data["status"] != "Ativo":
+            mensagem = f"Médico com CRM {crm} não está ativo na UF {uf.upper()}."
+            log(mensagem)
+            return mensagem, tipo_cr
+
+        nome_medico = medico_data["nome"].upper()
+
+    except Exception as e:
+        log(f"Erro ao consultar dados do médico: {e}")
+        return "Falha ao buscar médico na API.", tipo_cr
+
+    try:
         conn = conectar_central()
         if not conn:
-            mensagem = "Falha na conexão com o banco central."
-            log(mensagem)
-            return mensagem
+            return "Erro na conexão com o banco central.", tipo_cr
 
         cursor = conn.cursor()
 
-        dir_atual = Path(__file__).parent
-        caminho_arquivo_crm = get_resource_path(f"robos/robo_cadastro_prescritor/CRM_INFO/{uf.upper()}.TXT")
-
-
-        if not Path(caminho_arquivo_crm).exists():
-            mensagem = f"O estado '{uf.upper()}' não encontrado. Verifique a sigla digitada."
-            log(f"O estado '{uf.upper()}' não encontrado. Verifique a sigla digitada.")
-            return
-
-        nome_medico = None
-        with open(caminho_arquivo_crm, 'r', encoding='utf-8') as file:
-            for linha in file:
-                campos = linha.strip().split("!")
-                if len(campos) >= 3 and campos[0] == str(crm):
-                    nome_medico = campos[2].upper()
-
-                    if campos[4] != 'Ativo':
-                        mensagem = f"Médico com CRM {crm}, Não Ativo na UF {(uf.upper())}."
-                        log(f"Médico com CRM {crm}, Não Ativo na UF {(uf.upper())}.")
-                        return
-                    break
-
-        if not nome_medico:
-            mensagem =  f"Médico com CRM {crm}, Não encontrado na base de dados {(uf.upper())}."
-            log(f"Médico com CRM {crm}, Não encontrado na base de dados {(uf.upper())}.")
-            return
-
-
-
-
+        # Verifica se já existe
         cursor.execute("SELECT COUNT(*) FROM MEDICOS WHERE CR = ? AND UF = ?", (crm, uf.upper()))
         resultado = cursor.fetchone()
 
         if resultado[0] > 0:
-            cursor.execute("update medicos set NOME = ? WHERE CR = ? AND UF = ?",
-                           (nome_medico, crm, uf.upper()))
+            cursor.execute("UPDATE MEDICOS SET NOME = ? WHERE CR = ? AND UF = ?", (nome_medico, crm, uf.upper()))
             conn.commit()
-            mensagem = f"Médico: {nome_medico} CRM: {crm}, JÁ CADASTRADO NA UF {uf.upper()}."
-            log(f"Médico: {nome_medico} CRM: {crm}, JÁ CADASTRADO NA UF {uf.upper()}.")
-            return
+            mensagem = f"Médico {nome_medico}, CRM {crm}, já cadastrado na UF {uf.upper()}"
+        else:
+            insert_query = "INSERT INTO MEDICOS (TAB_MASTER_ORIGEM, NOME, CODIGO_CR, CR, UF, SITUACAO_INSCRICAO) VALUES (?, ?, 1, ?, ?, 19)"
+            cursor.execute(insert_query, (530427, nome_medico, crm, uf.upper()))
+            conn.commit()
 
-        script_crm = """INSERT INTO medicos (
-        NOME,
-        CODIGO_CR,
-        CR,
-        UF
-        )
-        VALUES (?, 1, ?, ?);"""
-        cursor.execute(script_crm, (nome_medico, crm, uf.upper()))
-        conn.commit()
+            #atualizar a REG_MASTER_ORIGEM
+            cursor.execute("SELECT MEDICO FROM MEDICOS WHERE CR = ? AND UF = ?", (crm, uf.upper()))
+            resultado = cursor.fetchone()
+            if resultado:
+                medico_id = resultado[0]
+                cursor.execute("UPDATE MEDICOS SET REG_MASTER_ORIGEM = ? WHERE MEDICO = ?",(medico_id, medico_id))
+                conn.commit()
 
-        mensagem =  f"Médico(a) {nome_medico}, Cadastrado com sucesso!"
-        log(f"Médico(a) {nome_medico}, Cadastrado com sucesso!")
-        return
+            mensagem = f"Médico {nome_medico}, CRM {crm}, cadastrado com sucesso!"
 
+        log(mensagem)
+        return mensagem, tipo_cr
 
     except Exception as e:
-        log(f"erro ao conectar ao banco central: {e}")
+        log(f"Erro ao cadastrar médico no banco: {e}")
+        return "Erro ao cadastrar médico na central, por favor re-abra o chamado.", tipo_cr
 
     finally:
         if cursor:
             cursor.close()
         if conn:
             conn.close()
-        return mensagem, tipo_cr
 
 
-
-
-
-
-
-
-
-
-
-
-
-def interagir_chamado(cod_chamado, token, mensagem, tipo_cr):
-
-
+def interagir_chamado(cod_chamado, token_desk, mensagem, tipo_cr):
     descricao = f"{mensagem}\n"
-    if tipo_cr != "CRM":
-        cod_status = "0000006"
-    else:
-        cod_status = "0000002"
-
-
+    cod_status = "0000006" if tipo_cr.upper() != "CRM" else "0000002"
     data_interacao = datetime.now().strftime("%d-%m-%Y")
-    url = "https://api.desk.ms/ChamadosSuporte/interagir"
 
     payload = {
         "Chave": cod_chamado,
@@ -222,28 +181,20 @@ def interagir_chamado(cod_chamado, token, mensagem, tipo_cr):
     }
 
     headers = {
-        "Authorization": token,
+        "Authorization": token_desk,
         "Content-Type": "application/json"
     }
 
     try:
-        response = requests.put(url, json=payload, headers=headers)
-
+        response = requests.put("https://api.desk.ms/ChamadosSuporte/interagir", json=payload, headers=headers)
         if response.status_code == 200:
             if cod_status == "0000006":
-                log(f"Chamado {cod_chamado} encaminhado para análise. \n")
+                log(f"✅Chamado {cod_chamado} encaminhado para análise. \n")
 
             if cod_status == "0000002":
-                log(f"Chamado {cod_chamado} encerrado com sucesso! \n")
+                log(f"✅Chamado {cod_chamado} encerrado com sucesso! \n")
         else:
-            log(f"Erro ao interagir no chamado. Código: {response.status_code}")
-            log("Resposta da API:")
+            log(f"❌ Erro ao interagir no chamado {cod_chamado}. Código: {response.status_code}")
             log(response.text)
-            try:
-                erro_json = response.json()
-                log(f"Detalhes do erro: {erro_json}")
-            except ValueError:
-                log("Não foi possível converter a resposta da API para JSON.")
-
     except requests.exceptions.RequestException as e:
-        log(f"Erro ao conectar com a API: {e}")
+        log(f"Erro ao conectar com a API Desk.ms: {e}")
