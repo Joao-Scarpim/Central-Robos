@@ -31,21 +31,6 @@ Funcionalidades
 * Geração de executável para distribuição
 
 
-Estrutura do Projeto
-
-robozao/
-├── gui/
-│   ├── app.py
-│   └── loading.gif
-├── logs/
-│   ├── logs_pedidos_de_compra/
-│   └── logs_chave_nao_existente/
-├── robos/
-│   ├── robo_pedido_de_compra/
-│   ├── robo_chave_nao_existente/
-│   ├── robo_cadastro_prescritor/
-│   └── robo_exclusao_protocolo/
-├── main.py
 
 Tecnologias Utilizadas - Python 3.x, customtkinter, pyodbc, requests, python-dotenv, SQL Server, auto-py-to-exe / pyinstaller (para empacotar)
 
