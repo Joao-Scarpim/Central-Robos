@@ -46,7 +46,7 @@ Autor
 
 João Victor Scarpim Freitas
 
-Estagiário de Engenharia de Software
+Desenvolvedor RPA Python
 
 Python Developer
 
